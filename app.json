@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Nata Baby",
+    "slug": "nata-baby-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/app-icon-square.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#FFF6F8"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/app-icon-square.png",
+        "backgroundColor": "#FFE6EF"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://localhost:3000"
+    }
+  }
+}

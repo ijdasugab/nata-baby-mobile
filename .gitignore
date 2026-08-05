@@ -1,0 +1,8 @@
+node_modules/
+.expo/
+.idea/
+dist/
+web-build/
+*.log
+.DS_Store
+/.env
