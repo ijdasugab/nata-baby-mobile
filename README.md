@@ -1,5 +1,7 @@
 # Nata Baby Mobile
 
+[![CI](https://github.com/ijdasugab/nata-baby-mobile/actions/workflows/ci.yml/badge.svg)](https://github.com/ijdasugab/nata-baby-mobile/actions/workflows/ci.yml)
+
 ![Expo](https://img.shields.io/badge/Expo-SDK%2054-000020?logo=expo&logoColor=white)
 ![React Native](https://img.shields.io/badge/React%20Native-0.81.5-61DAFB?logo=react&logoColor=111827)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
