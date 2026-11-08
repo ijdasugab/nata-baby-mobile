@@ -8,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -15,67 +16,62 @@ import Svg, { Circle, Defs, Ellipse, Line, LinearGradient, Path, Polyline, Rect,
 import babyAvatarSource from "./assets/app-icon-baby.png";
 import babyCrawlSource from "./assets/crawling-baby.png";
 import babyGreetingSource from "./assets/girl-baby.png";
+import { api, loadToken } from "./src/api";
+import { formatAge, formatNumber, growthSeries, useBabyData, type BabyData } from "./src/useBabyData";
+
+/** Props bersama yang dibawa setiap layar dari hook data. */
+type ScreenProps = {
+  data: BabyData;
+  loading: boolean;
+  error: string | null;
+  reload: () => void;
+};
+
+/** Token untuk aksi tulis. Login sudah dilakukan hook saat memuat. */
+async function ensureTokenForSave(): Promise<string> {
+  const token = await loadToken();
+  if (!token) throw new Error("Sesi tidak ditemukan. Buka ulang aplikasi.");
+  return token;
+}
 
 type ScreenName = "home" | "growth" | "add" | "milestone" | "immunization" | "profile";
 type GrowthMetric = "weight" | "height" | "head";
 type AddMetric = "weight" | "height" | "head";
 
-const baby = {
-  name: "Natasha",
-  age: "7 bulan 12 hari",
-  weight: "7.8",
-  height: "68.5",
-  head: "43.2"
-};
 
-const growthPoints = [
-  { x: 0, y: 4.9 },
-  { x: 1, y: 5.6 },
-  { x: 2, y: 6.2 },
-  { x: 3, y: 6.4 },
-  { x: 4, y: 7.1 },
-  { x: 5, y: 7.4 },
-  { x: 6, y: 8.1 },
-  { x: 7, y: 8.3 },
-  { x: 8, y: 9.1 },
-  { x: 9, y: 9.1 },
-  { x: 10, y: 9.3 }
-];
-
-const milestones = [
-  { title: "Mengangkat kepala dalam posisi tengkurap", age: "6 bulan", tone: "success", image: require("./assets/milestone-green.png") },
-  { title: "Duduk tanpa bantuan beberapa detik", age: "7 bulan", tone: "warning", image: require("./assets/milestone-blue.png") },
-  { title: "Meraih benda dengan kedua tangan", age: "7 bulan", tone: "warning", image: require("./assets/milestone-yellow.png") }
-];
-
-const immunizations = [
-  { name: "BCG", age: "Lahir", done: true },
-  { name: "Polio 1", age: "Usia 1 bulan", done: true }
+const MILESTONE_THUMBS = [
+  require("./assets/milestone-green.png"),
+  require("./assets/milestone-blue.png"),
+  require("./assets/milestone-yellow.png")
 ];
 
 export default function App() {
   const [screen, setScreen] = useState<ScreenName>("home");
   const [growthMetric, setGrowthMetric] = useState<GrowthMetric>("weight");
   const [addMetric, setAddMetric] = useState<AddMetric>("weight");
+  const { data, loading, error, reload } = useBabyData();
 
+  // P2-3: angka di layar datang dari API, bukan objek hardcode. Saat memuat
+  // atau gagal, layar mengatakan apa adanya.
   const content = useMemo(() => {
+    const props = { data, loading, error, reload };
     if (screen === "growth") {
-      return <GrowthScreen metric={growthMetric} onMetricChange={setGrowthMetric} onBack={() => setScreen("home")} />;
+      return <GrowthScreen {...props} metric={growthMetric} onMetricChange={setGrowthMetric} onBack={() => setScreen("home")} />;
     }
     if (screen === "add") {
-      return <AddDataScreen metric={addMetric} onMetricChange={setAddMetric} onBack={() => setScreen("home")} />;
+      return <AddDataScreen {...props} metric={addMetric} onMetricChange={setAddMetric} onBack={() => setScreen("home")} />;
     }
     if (screen === "milestone") {
-      return <MilestoneScreen onBack={() => setScreen("home")} />;
+      return <MilestoneScreen {...props} onBack={() => setScreen("home")} />;
     }
     if (screen === "immunization") {
-      return <ImmunizationScreen onBack={() => setScreen("home")} />;
+      return <ImmunizationScreen {...props} onBack={() => setScreen("home")} />;
     }
     if (screen === "profile") {
-      return <ProfileScreen onBack={() => setScreen("home")} />;
+      return <ProfileScreen {...props} onBack={() => setScreen("home")} />;
     }
-    return <HomeScreen onNavigate={setScreen} />;
-  }, [addMetric, growthMetric, screen]);
+    return <HomeScreen {...props} onNavigate={setScreen} />;
+  }, [addMetric, data, error, growthMetric, loading, reload, screen]);
 
   return (
     <SafeAreaProvider>
@@ -88,16 +84,56 @@ export default function App() {
   );
 }
 
-function HomeScreen({ onNavigate }: { onNavigate: (screen: ScreenName) => void }) {
+/** Ringkasan angka terakhir dari riwayat pengukuran. */
+function latestValues(data: BabyData) {
+  const latest = data.measurements[0] ?? null;
+  return {
+    latest,
+    weight: latest ? formatNumber(latest.weightKg, 2) : "-",
+    height: latest ? formatNumber(latest.heightCm, 1) : "-",
+    head: latest ? formatNumber(latest.headCircumferenceCm, 1) : "-",
+    achieved: data.milestones.filter((item) => item.achieved).length
+  };
+}
+
+/** Banner status saat data belum siap. */
+function DataStatus({ loading, error, onRetry }: { loading: boolean; error: string | null; onRetry?: () => void }) {
+  if (loading) {
+    return (
+      <View style={styles.tipsCard}>
+        <Text style={styles.bodyText}>Memuat data dari server...</Text>
+      </View>
+    );
+  }
+  if (error) {
+    return (
+      <View style={styles.tipsCard}>
+        <View style={styles.tipsText}>
+          <Text style={styles.tipsLabel}>Tidak bisa memuat data</Text>
+          <Text style={styles.bodyText}>{error}</Text>
+        </View>
+      </View>
+    );
+  }
+  if (onRetry) return null;
+  return null;
+}
+
+function HomeScreen({ data, loading, error, onNavigate }: ScreenProps & { onNavigate: (screen: ScreenName) => void }) {
+  const { achieved, head, height, weight } = latestValues(data);
+  const child = data.child;
+
   return (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.homeHeader}>
         <Text style={styles.brandTitle}>Nata Baby</Text>
         <Pressable style={styles.bellButton} onPress={() => onNavigate("immunization")}>
           <Ionicons name="notifications-outline" size={24} color={colors.navy} />
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>2</Text>
-          </View>
+          {data.masterImmunizations.length > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{data.masterImmunizations.length}</Text>
+            </View>
+          )}
         </Pressable>
       </View>
 
@@ -109,21 +145,23 @@ function HomeScreen({ onNavigate }: { onNavigate: (screen: ScreenName) => void }
         <BabyIllustration />
       </View>
 
+      <DataStatus loading={loading} error={error} />
+
       <Pressable style={styles.profileCard} onPress={() => onNavigate("profile")}>
         <BabyAvatar />
         <View style={styles.profileText}>
-          <Text style={styles.babyName}>{baby.name} <Text style={styles.heart}>♥</Text></Text>
-          <Text style={styles.mutedText}>{baby.age}</Text>
+          <Text style={styles.babyName}>{child?.fullName ?? "Belum ada data anak"} <Text style={styles.heart}>♥</Text></Text>
+          <Text style={styles.mutedText}>{child ? formatAge(child.birthDate) : "-"}</Text>
         </View>
         <Ionicons name="chevron-forward" size={26} color="#717A9A" />
       </Pressable>
 
       <Text style={styles.sectionTitle}>Ringkasan Hari Ini</Text>
       <View style={styles.metricGrid}>
-        <MetricCard title="Berat Badan" value={baby.weight} unit="kg" delta="+0.3 kg dari bulan lalu" icon="trending-up" tone="green" />
-        <MetricCard title="Tinggi Badan" value={baby.height} unit="cm" delta="+1.2 cm dari bulan lalu" icon="body-outline" tone="blue" />
-        <MetricCard title="Lingkar Kepala" value={baby.head} unit="cm" delta="Normal" icon="happy-outline" tone="orange" />
-        <MetricCard title="Milestone" value="5" unit="pencapaian" delta="Lihat detail" icon="star" tone="yellow" onPress={() => onNavigate("milestone")} />
+        <MetricCard title="Berat Badan" value={weight} unit="kg" delta={achieved ? "Terakhir dicatat" : "Belum ada"} icon="trending-up" tone="green" />
+        <MetricCard title="Tinggi Badan" value={height} unit="cm" delta="Terakhir dicatat" icon="body-outline" tone="blue" />
+        <MetricCard title="Lingkar Kepala" value={head} unit="cm" delta="Terakhir dicatat" icon="happy-outline" tone="orange" />
+        <MetricCard title="Milestone" value={String(achieved)} unit="pencapaian" delta="Lihat detail" icon="star" tone="yellow" onPress={() => onNavigate("milestone")} />
       </View>
 
       <View style={styles.tipsCard}>
@@ -137,14 +175,27 @@ function HomeScreen({ onNavigate }: { onNavigate: (screen: ScreenName) => void }
   );
 }
 
-function GrowthScreen({ metric, onMetricChange, onBack }: {
+function GrowthScreen({ data, loading, error, metric, onMetricChange, onBack }: ScreenProps & {
   metric: GrowthMetric;
   onMetricChange: (metric: GrowthMetric) => void;
   onBack: () => void;
 }) {
   const title = metric === "weight" ? "Berat Badan" : metric === "height" ? "Tinggi Badan" : "Lingkar Kepala";
-  const value = metric === "weight" ? "7.8" : metric === "height" ? "68.5" : "43.2";
+  const latest = data.measurements[0] ?? null;
+  const value = !latest
+    ? "-"
+    : metric === "weight"
+      ? formatNumber(latest.weightKg, 2)
+      : metric === "height"
+        ? formatNumber(latest.heightCm, 1)
+        : formatNumber(latest.headCircumferenceCm, 1);
   const unit = metric === "weight" ? "kg" : "cm";
+  const points = growthSeries(data.measurements, metric);
+  const statusLabel = metric === "weight"
+    ? latest?.weightForAgeStatus
+    : metric === "height"
+      ? latest?.heightForAgeStatus
+      : latest?.headCircumferenceStatus;
 
   return (
     <ScreenFrame title="Grafik Pertumbuhan" onBack={onBack}>
@@ -157,27 +208,39 @@ function GrowthScreen({ metric, onMetricChange, onBack }: {
       <View style={styles.metricHero}>
         <View>
           <Text style={styles.bigValue}>{value}<Text style={styles.bigUnit}> {unit}</Text></Text>
-          <Text style={styles.mutedText}>{baby.age}</Text>
+          <Text style={styles.mutedText}>{data.child ? formatAge(data.child.birthDate) : "-"}</Text>
         </View>
         <View style={styles.deltaPill}>
-          <Text style={styles.deltaPillText}>+0.3 kg</Text>
+          <Text style={styles.deltaPillText}>{points.length} catatan</Text>
         </View>
       </View>
 
-      <GrowthChart title={title} />
+      {points.length >= 2 ? (
+        <GrowthChart title={title} points={points} value={`${value} ${unit}`} />
+      ) : (
+        <View style={styles.percentileCard}>
+          <Text style={styles.bodyText}>
+            {loading ? "Memuat grafik..." : "Grafik butuh minimal dua catatan pengukuran."}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.percentileCard}>
         <View>
-          <Text style={styles.cardTitle}>Persentil (WHO)</Text>
-          <Text style={styles.primaryText}>Normal</Text>
+          <Text style={styles.cardTitle}>Status gizi</Text>
+          <Text style={styles.primaryText}>{statusLabel ?? "Belum dihitung"}</Text>
         </View>
-        <Text style={styles.percentileValue}>75th</Text>
+        <Text style={styles.percentileValue}>{latest?.weightForAgeZ !== undefined && latest?.weightForAgeZ !== null ? `${formatNumber(latest.weightForAgeZ, 2)} SD` : "-"}</Text>
       </View>
+      {error ? <Text style={styles.mutedText}>{error}</Text> : null}
     </ScreenFrame>
   );
 }
 
-function MilestoneScreen({ onBack }: { onBack: () => void }) {
+function MilestoneScreen({ data, loading, error, onBack }: ScreenProps & { onBack: () => void }) {
+  const achievedCount = data.milestones.filter((item) => item.achieved).length;
+  const rows = data.milestones.slice(0, 20);
+
   return (
     <ScreenFrame title="Milestone" onBack={onBack}>
       <View style={styles.categoryRow}>
@@ -200,29 +263,45 @@ function MilestoneScreen({ onBack }: { onBack: () => void }) {
         </View>
         <TrophyIllustration />
         <Text style={styles.achievementTitle}>Hebat!</Text>
-        <Text style={styles.achievementCopy}>{baby.name} telah mencapai{"\n"}5 milestone!</Text>
+        <Text style={styles.achievementCopy}>
+          {data.child?.fullName ?? "Si kecil"} telah mencapai{"\n"}{achievedCount} milestone!
+        </Text>
       </View>
 
       <Text style={styles.sectionTitle}>Terbaru</Text>
-      <View style={styles.listStack}>
-        {milestones.map((item) => (
-          <View key={item.title} style={styles.listItem}>
-            <MilestoneThumb source={item.image} />
-            <View style={styles.listText}>
-              <Text style={styles.itemTitle}>{item.title}</Text>
-              <Text style={styles.mutedText}>{item.age}</Text>
+      {rows.length === 0 ? (
+        <Text style={styles.mutedText}>
+          {loading ? "Memuat milestone..." : error ?? "Belum ada milestone tercatat."}
+        </Text>
+      ) : (
+        <View style={styles.listStack}>
+          {rows.map((item, index) => (
+            <View key={item.id} style={styles.listItem}>
+              <MilestoneThumb source={MILESTONE_THUMBS[index % MILESTONE_THUMBS.length]} />
+              <View style={styles.listText}>
+                <Text style={styles.itemTitle}>{item.milestoneMaster.milestoneText}</Text>
+                <Text style={styles.mutedText}>
+                  {item.milestoneMaster.ageMonth} bulan
+                  {item.milestoneMaster.category ? ` · ${item.milestoneMaster.category}` : ""}
+                </Text>
+              </View>
+              <View style={[styles.checkIcon, item.achieved ? styles.checkSuccess : styles.checkWarning]}>
+                <Ionicons name={item.achieved ? "checkmark" : "time-outline"} size={18} color="#FFFFFF" />
+              </View>
             </View>
-            <View style={[styles.checkIcon, item.tone === "success" ? styles.checkSuccess : styles.checkWarning]}>
-              <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-            </View>
-          </View>
-        ))}
-      </View>
+          ))}
+        </View>
+      )}
     </ScreenFrame>
   );
 }
 
-function ImmunizationScreen({ onBack }: { onBack: () => void }) {
+function ImmunizationScreen({ data, loading, error, onBack }: ScreenProps & { onBack: () => void }) {
+  const given = data.immunizations.filter((item) => item.givenDate);
+  const nextUp = data.masterImmunizations.find(
+    (master) => !given.some((item) => item.immunizationMaster?.vaccineName === master.vaccineName)
+  );
+
   return (
     <ScreenFrame title="Imunisasi" onBack={onBack}>
       <View style={styles.twoTabs}>
@@ -235,47 +314,96 @@ function ImmunizationScreen({ onBack }: { onBack: () => void }) {
       </View>
 
       <Text style={styles.sectionTitle}>Selanjutnya</Text>
-      <View style={styles.upcomingCard}>
-        <View style={styles.vaccineBubble}>
-          <Ionicons name="medical" size={30} color="#FFFFFF" />
+      {nextUp ? (
+        <View style={styles.upcomingCard}>
+          <View style={styles.vaccineBubble}>
+            <Ionicons name="medical" size={30} color="#FFFFFF" />
+          </View>
+          <View style={styles.listText}>
+            <Text style={styles.itemTitle}>{nextUp.vaccineName}</Text>
+            <Text style={styles.mutedText}>Usia {nextUp.recommendedAgeMonth ?? 0} bulan</Text>
+            {nextUp.description ? <Text style={styles.mutedText}>{nextUp.description}</Text> : null}
+          </View>
         </View>
-        <View style={styles.listText}>
-          <Text style={styles.itemTitle}>DPT-HB-Hib 3</Text>
-          <Text style={styles.mutedText}>Usia 8 bulan</Text>
-          <Text style={styles.mutedText}>20 Mei 2024</Text>
-        </View>
-        <View style={styles.duePill}>
-          <Text style={styles.duePillText}>Dalam 12 hari</Text>
-        </View>
-      </View>
+      ) : (
+        <Text style={styles.mutedText}>
+          {loading ? "Memuat jadwal..." : error ?? "Semua vaksin pada daftar sudah tercatat."}
+        </Text>
+      )}
 
       <Text style={styles.sectionTitle}>Riwayat Imunisasi</Text>
-      <View style={styles.listStack}>
-        {immunizations.map((item) => (
-          <View key={item.name} style={styles.listItem}>
-            <View style={styles.historyIcon}>
-              <Ionicons name="medical-outline" size={22} color="#3E98E8" />
+      {given.length === 0 ? (
+        <Text style={styles.mutedText}>Belum ada imunisasi tercatat.</Text>
+      ) : (
+        <View style={styles.listStack}>
+          {given.map((item) => (
+            <View key={item.id} style={styles.listItem}>
+              <View style={styles.historyIcon}>
+                <Ionicons name="medical-outline" size={22} color="#3E98E8" />
+              </View>
+              <View style={styles.listText}>
+                <Text style={styles.itemTitle}>{item.immunizationMaster?.vaccineName ?? "Vaksin"}</Text>
+                <Text style={styles.mutedText}>
+                  {item.givenDate ? new Date(item.givenDate).toLocaleDateString("id-ID") : "-"}
+                  {item.location ? ` · ${item.location}` : ""}
+                </Text>
+              </View>
+              <View style={styles.checkSuccess}>
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+              </View>
             </View>
-            <View style={styles.listText}>
-              <Text style={styles.itemTitle}>{item.name}</Text>
-              <Text style={styles.mutedText}>{item.age}</Text>
-            </View>
-            <View style={styles.checkSuccess}>
-              <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-            </View>
-          </View>
-        ))}
-      </View>
+          ))}
+        </View>
+      )}
     </ScreenFrame>
   );
 }
 
-function AddDataScreen({ metric, onMetricChange, onBack }: {
+function AddDataScreen({ data, loading, metric, onMetricChange, onBack, reload }: ScreenProps & {
   metric: AddMetric;
   onMetricChange: (metric: AddMetric) => void;
   onBack: () => void;
 }) {
-  const display = metric === "weight" ? "7.8" : metric === "height" ? "68.5" : "43.2";
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const child = data.child;
+
+  async function handleSave() {
+    if (!child) {
+      setMessage("Belum ada data anak yang bisa diisi.");
+      return;
+    }
+    const parsed = Number(amount.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setMessage("Isi angka yang valid dulu.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage(null);
+    try {
+      // P2-3: simpan sungguhan ke API, bukan tombol tanpa aksi.
+      const created = await api.createMeasurement((await ensureTokenForSave()), child.id, {
+        measuredAt: new Date().toISOString().slice(0, 10),
+        ...(metric === "weight" ? { weightKg: parsed } : {}),
+        ...(metric === "height" ? { heightCm: parsed } : {}),
+        ...(metric === "head" ? { headCircumferenceCm: parsed } : {})
+      });
+      setAmount("");
+      setMessage(
+        created.weightForAgeStatus || created.heightForAgeStatus
+          ? `Tersimpan. Status: ${created.weightForAgeStatus ?? created.heightForAgeStatus}`
+          : "Tersimpan."
+      );
+      reload();
+    } catch (saveError) {
+      setMessage(saveError instanceof Error ? saveError.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const unit = metric === "weight" ? "kg" : "cm";
 
   return (
@@ -286,22 +414,38 @@ function AddDataScreen({ metric, onMetricChange, onBack }: {
         <AddType label="Lingkar Kepala" icon="sync-outline" active={metric === "head"} onPress={() => onMetricChange("head")} />
       </View>
 
-      <Gauge value={display} unit={unit} />
-      <Pressable style={styles.saveButton}>
+      <Gauge value={amount === "" ? "-" : amount} unit={unit} />
+
+      <View style={styles.inputRow}>
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="decimal-pad"
+          placeholder={`Nilai dalam ${unit}`}
+          placeholderTextColor="#9AA3BD"
+        />
+      </View>
+
+      {message ? <Text style={styles.mutedText}>{message}</Text> : null}
+      {loading ? <Text style={styles.mutedText}>Memuat data anak...</Text> : null}
+
+      <Pressable style={styles.saveButton} onPress={handleSave} disabled={saving}>
         <Ionicons name="checkmark" size={22} color="#FFFFFF" />
-        <Text style={styles.saveButtonText}>Simpan Data</Text>
+        <Text style={styles.saveButtonText}>{saving ? "Menyimpan..." : "Simpan Data"}</Text>
       </Pressable>
     </ScreenFrame>
   );
 }
 
-function ProfileScreen({ onBack }: { onBack: () => void }) {
+function ProfileScreen({ data, onBack }: ScreenProps & { onBack: () => void }) {
+  const child = data.child;
   return (
     <ScreenFrame title="Profil" onBack={onBack}>
       <View style={styles.profileDetailCard}>
         <BabyAvatar large />
-        <Text style={styles.babyName}>{baby.name} <Text style={styles.heart}>♥</Text></Text>
-        <Text style={styles.mutedText}>{baby.age}</Text>
+        <Text style={styles.babyName}>{child?.fullName ?? "Belum ada data anak"} <Text style={styles.heart}>♥</Text></Text>
+        <Text style={styles.mutedText}>{child ? formatAge(child.birthDate) : "-"}</Text>
         <Text style={styles.bodyText}>Profil dan catatan si kecil akan dikembangkan setelah UI utama stabil.</Text>
       </View>
     </ScreenFrame>
@@ -443,22 +587,40 @@ function TrophyIllustration() {
   );
 }
 
-function GrowthChart({ title }: { title: string }) {
+function GrowthChart({ title, points, value }: {
+  title: string;
+  points: Array<{ x: number; y: number }>;
+  value: string;
+}) {
   const width = 300;
   const height = 210;
   const left = 30;
   const top = 18;
   const chartWidth = 246;
   const chartHeight = 144;
-  const min = 4;
-  const max = 10;
-  const coords = growthPoints.map((point) => {
-    const x = left + (point.x / 10) * chartWidth;
-    const y = top + chartHeight - ((point.y - min) / (max - min)) * chartHeight;
-    return `${x},${y}`;
-  });
-  const selectedX = left + 0.8 * chartWidth;
-  const selectedY = top + chartHeight - ((9.1 - min) / (max - min)) * chartHeight;
+
+  // Skala dihitung dari data nyata, bukan rentang tetap, supaya garis tidak
+  // menempel di tepi saat berat atau tinggi anak di luar 4 sampai 10.
+  const ys = points.map((point) => point.y);
+  const xs = points.map((point) => point.x);
+  const rawMin = Math.min(...ys);
+  const rawMax = Math.max(...ys);
+  const pad = Math.max((rawMax - rawMin) * 0.2, 0.5);
+  const min = rawMin - pad;
+  const max = rawMax + pad;
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const spanX = maxX - minX || 1;
+
+  const toX = (x: number) => left + ((x - minX) / spanX) * chartWidth;
+  const toY = (y: number) => top + chartHeight - ((y - min) / (max - min)) * chartHeight;
+
+  const coords = points.map((point) => `${toX(point.x)},${toY(point.y)}`);
+  const last = points[points.length - 1];
+  const selectedX = toX(last.x);
+  const selectedY = toY(last.y);
+  const ticks = [min, min + (max - min) / 3, min + ((max - min) * 2) / 3, max];
+  const labels = [points[0], ...(points.length > 2 ? [points[Math.floor(points.length / 2)]] : []), last];
 
   return (
     <View style={styles.chartWrap}>
@@ -469,27 +631,36 @@ function GrowthChart({ title }: { title: string }) {
             <Stop offset="1" stopColor={colors.primarySoft} stopOpacity="0.04" />
           </LinearGradient>
         </Defs>
-        {[4, 6, 8, 10].map((tick) => {
-          const y = top + chartHeight - ((tick - min) / (max - min)) * chartHeight;
+        {ticks.map((tick) => {
+          const y = toY(tick);
           return (
             <Fragment key={tick}>
               <Line x1={left} y1={y} x2={left + chartWidth} y2={y} stroke="#E8DDE5" strokeDasharray="5 6" strokeWidth="1" />
-              <SvgText x={4} y={y + 4} fill="#6B7280" fontSize="11">{tick}</SvgText>
+              <SvgText x={4} y={y + 4} fill="#6B7280" fontSize="11">{tick.toFixed(1)}</SvgText>
             </Fragment>
           );
         })}
         <Path d={`M ${coords.join(" L ")} L ${left + chartWidth} ${top + chartHeight} L ${left} ${top + chartHeight} Z`} fill="url(#chartFill)" />
         <Polyline points={coords.join(" ")} fill="none" stroke={colors.primary} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        {growthPoints.map((point) => {
-          const [x, y] = coords[point.x].split(",").map(Number);
-          return <Circle key={`${title}-${point.x}`} cx={x} cy={y} r="4" fill={colors.primary} stroke="#FFFFFF" strokeWidth="2" />;
-        })}
+        {points.map((point, index) => (
+          <Circle key={`${title}-${index}`} cx={toX(point.x)} cy={toY(point.y)} r="4" fill={colors.primary} stroke="#FFFFFF" strokeWidth="2" />
+        ))}
         <Line x1={selectedX} y1={selectedY} x2={selectedX} y2={top + chartHeight} stroke={colors.primary} strokeDasharray="5 6" strokeWidth="1.4" />
         <Circle cx={selectedX} cy={selectedY} r="7" fill="#FFFFFF" stroke={colors.primary} strokeWidth="3" />
         <Path d={`M ${selectedX - 30} ${selectedY - 49} Q ${selectedX - 30} ${selectedY - 58} ${selectedX - 20} ${selectedY - 58} L ${selectedX + 25} ${selectedY - 58} Q ${selectedX + 35} ${selectedY - 58} ${selectedX + 35} ${selectedY - 48} L ${selectedX + 35} ${selectedY - 27} Q ${selectedX + 35} ${selectedY - 18} ${selectedX + 25} ${selectedY - 18} L ${selectedX + 4} ${selectedY - 18} L ${selectedX} ${selectedY - 11} L ${selectedX - 4} ${selectedY - 18} L ${selectedX - 20} ${selectedY - 18} Q ${selectedX - 30} ${selectedY - 18} ${selectedX - 30} ${selectedY - 28} Z`} fill={colors.primary} />
-        <SvgText x={selectedX + 2} y={selectedY - 33} fill="#FFFFFF" fontSize="13" fontWeight="700" textAnchor="middle">7.8 kg</SvgText>
-        {["1 bln", "3 bln", "5 bln", "7 bln", "9 bln"].map((label, index) => (
-          <SvgText key={label} x={left + index * (chartWidth / 4)} y={top + chartHeight + 22} fill={colors.navy} fontSize="11" fontWeight="700" textAnchor="middle">{label}</SvgText>
+        <SvgText x={selectedX + 2} y={selectedY - 33} fill="#FFFFFF" fontSize="13" fontWeight="700" textAnchor="middle">{value}</SvgText>
+        {labels.map((point, index) => (
+          <SvgText
+            key={`label-${index}`}
+            x={toX(point.x)}
+            y={top + chartHeight + 22}
+            fill={colors.navy}
+            fontSize="11"
+            fontWeight="700"
+            textAnchor="middle"
+          >
+            {Math.round(point.x)} bln
+          </SvgText>
         ))}
         <SvgText x={4} y={top - 3} fill="#6B7280" fontSize="11">{title === "Berat Badan" ? "kg" : "cm"}</SvgText>
       </Svg>
@@ -1183,6 +1354,19 @@ const styles = StyleSheet.create({
   gaugeWrap: {
     minHeight: 220,
     justifyContent: "center"
+  },
+  inputRow: {
+    marginTop: 4
+  },
+  input: {
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#FFD4E2",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 18,
+    fontSize: 18,
+    color: colors.navy
   },
   saveButton: {
     height: 58,

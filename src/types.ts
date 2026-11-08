@@ -31,6 +31,11 @@ export type Measurement = {
   weightKg?: string | number | null;
   heightCm?: string | number | null;
   headCircumferenceCm?: string | number | null;
+  // P1-2: nilai z dihitung server dan ikut disimpan.
+  weightForAgeZ?: string | number | null;
+  heightForAgeZ?: string | number | null;
+  weightForHeightZ?: string | number | null;
+  headCircumferenceZ?: string | number | null;
   weightForAgeStatus?: string | null;
   heightForAgeStatus?: string | null;
   weightForHeightStatus?: string | null;
